@@ -91,11 +91,13 @@ select{border:1px solid var(--line); background:var(--surface); color:var(--ink)
 .footer-note{color:var(--ink-soft); font-size:.75rem; margin-top:22px; text-align:center;}
 ::-webkit-scrollbar{height:6px;} ::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
 </style>
+<script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-database-compat.js"></script>
 </head>
 <body>
 <header>
   <h1>Отдел продаж <span style="color:var(--accent)">// KROT</span></h1>
-  <p class="sub">Еженедельная статистика лидов и оплат, проекты по месяцам. Данные сохраняются в этом браузере.</p>
+  <p class="sub">Общий дашборд команды — все изменения видны у всех в реальном времени. <span id="syncStatus" class="mono" style="color:var(--ink-soft)">⏳ подключение…</span></p>
 </header>
 <div class="wrap">
   <section class="card" id="shareCard">
@@ -228,11 +230,67 @@ months:[
 ]};
 
 let state=null, activeMonth=0;
-function load(){
+let fbRef=null, fbReady=false, fbSuppressSave=false;
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAZkMRGQHG41cBvjdsQqEGrrHxkLirwaR8",
+  authDomain: "sales-krot.firebaseapp.com",
+  databaseURL: "https://sales-krot-default-rtdb.firebaseio.com",
+  projectId: "sales-krot",
+  storageBucket: "sales-krot.firebasestorage.app",
+  messagingSenderId: "607408924741",
+  appId: "1:607408924741:web:fb5f25683e784269d21b2c"
+};
+
+function setSyncStatus(text,color){
+  const el=document.getElementById('syncStatus');
+  if(el){ el.textContent=text; el.style.color=color||''; }
+}
+
+function localLoad(){
   try{ const raw=localStorage.getItem('sales-dashboard-v1'); if(raw) return JSON.parse(raw); }catch(e){}
   return JSON.parse(JSON.stringify(DEFAULT_DATA));
 }
-function save(){ try{ localStorage.setItem('sales-dashboard-v1', JSON.stringify(state)); }catch(e){} }
+function load(){ return localLoad(); }
+
+function save(){
+  try{ localStorage.setItem('sales-dashboard-v1', JSON.stringify(state)); }catch(e){}
+  if(fbReady && fbRef && !fbSuppressSave){
+    fbRef.set(state).catch(()=>setSyncStatus('⚠ офлайн, изменения не отправлены','var(--accent)'));
+  }
+}
+
+function initFirebase(){
+  try{
+    if(!window.firebase || !firebaseConfig.apiKey){ setSyncStatus('⚪ локальный режим'); state=localLoad(); renderAll(); return; }
+    firebase.initializeApp(firebaseConfig);
+    fbRef=firebase.database().ref('dashboard');
+    fbRef.on('value', snap=>{
+      const val=snap.val();
+      fbReady=true;
+      if(val && Array.isArray(val.months)){
+        fbSuppressSave=true;
+        state=val;
+        if(activeMonth>=state.months.length) activeMonth=0;
+        renderAll();
+        fbSuppressSave=false;
+      } else {
+        state=localLoad();
+        fbRef.set(state);
+      }
+      setSyncStatus('🟢 онлайн, синхронизировано','var(--good)');
+    }, err=>{
+      console.error('Firebase error',err);
+      setSyncStatus('⚪ локальный режим (нет связи с базой)');
+      if(!state){ state=localLoad(); renderAll(); }
+    });
+  }catch(e){
+    console.error(e);
+    setSyncStatus('⚪ локальный режим');
+    state=localLoad(); renderAll();
+  }
+}
+
 function fmtEur(n){ return '€'+(Math.round(n*100)/100).toLocaleString('ru-RU'); }
 function sqlBase(w){ const leads=Number(w.leads)||0; return leads>0? leads : (Number(w.mql)||0); }
 
@@ -445,8 +503,7 @@ document.getElementById('addClient').onclick=()=>{
   save(); renderClients();
 };
 
-state=load();
-renderAll();
+initFirebase();
 
 document.getElementById('exportBtn').onclick=async ()=>{
   const json=JSON.stringify(state,null,2);
