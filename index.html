@@ -103,8 +103,8 @@ select{border:1px solid var(--line); background:var(--surface); color:var(--ink)
   <section class="card" id="shareCard">
     <h2><span class="lbl">Поделиться данными</span></h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <button class="btn accent" id="exportBtn">⭳ Скачать файл с данными</button>
-      <button class="btn" id="importBtn">⭱ Загрузить файл с данными</button>
+      <button class="btn accent" id="exportBtn">📥 Скачать файл с данными</button>
+      <button class="btn" id="importBtn">📤 Загрузить файл с данными</button>
       <input type="file" id="importFile" accept=".json" style="display:none">
     </div>
     <p class="sub" style="margin:10px 0 0">1) Отправьте человеку ссылку на этот дашборд. 2) Скачайте файл здесь и перешлите ему. 3) Он открывает ссылку и жмёт «Загрузить файл» — увидит ваши данные.</p>
@@ -260,34 +260,54 @@ function save(){
   }
 }
 
+function normalizeState(v){
+  if(!v || !v.months) return null;
+  const toArr=x=>Array.isArray(x)?x.filter(Boolean):Object.values(x||{});
+  const months=toArr(v.months);
+  months.forEach(m=>{
+    m.weeks=toArr(m.weeks);
+    m.clients=toArr(m.clients);
+    m.weeks.forEach(w=>METRIC_KEYS.forEach(k=>{ if(w[k]===undefined||w[k]===null) w[k]=0; }));
+  });
+  return months.length? {months:months} : null;
+}
+
 function initFirebase(){
+  state=localLoad(); renderAll();
+  const warn=t=>setSyncStatus(t,'var(--accent)');
   try{
-    if(!window.firebase || !firebaseConfig.apiKey){ setSyncStatus('⚪ локальный режим'); state=localLoad(); renderAll(); return; }
+    if(!window.firebase || !firebase.database){ warn('⚠ библиотека Firebase не загрузилась (блокировщик рекламы или сеть)'); return; }
     firebase.initializeApp(firebaseConfig);
     fbRef=firebase.database().ref('dashboard');
+    setTimeout(()=>{ if(!fbReady) warn('⚠ база не отвечает 10 сек (блокировщик, сеть или правила Firebase)'); },10000);
     fbRef.on('value', snap=>{
-      const val=snap.val();
+      const val=normalizeState(snap.val());
       fbReady=true;
-      if(val && Array.isArray(val.months)){
-        fbSuppressSave=true;
-        state=val;
-        if(activeMonth>=state.months.length) activeMonth=0;
-        renderAll();
-        fbSuppressSave=false;
-      } else {
-        state=localLoad();
-        fbRef.set(state);
-      }
       setSyncStatus('🟢 онлайн, синхронизировано','var(--good)');
+      try{
+        if(val){
+          fbSuppressSave=true;
+          state=val;
+          if(activeMonth>=state.months.length) activeMonth=0;
+          renderAll();
+          fbSuppressSave=false;
+        } else {
+          state=localLoad();
+          renderAll();
+          fbRef.set(state).catch(e=>warn('⚠ не удалось записать в базу: '+(e.code||e.message)));
+        }
+      }catch(e){
+        fbSuppressSave=false;
+        console.error(e);
+        warn('⚠ ошибка отображения: '+(e.message||e));
+      }
     }, err=>{
       console.error('Firebase error',err);
-      setSyncStatus('⚪ локальный режим (нет связи с базой)');
-      if(!state){ state=localLoad(); renderAll(); }
+      warn('⚠ ошибка базы: '+(err.code||err.message));
     });
   }catch(e){
     console.error(e);
-    setSyncStatus('⚪ локальный режим');
-    state=localLoad(); renderAll();
+    warn('⚠ ошибка: '+(e.message||e));
   }
 }
 
